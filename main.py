@@ -6,43 +6,54 @@ from datetime import datetime
 
 # Environment variables
 TOKEN = os.getenv('TOKEN')
-TARGET_ID = int(os.getenv('TARGET_ID'))
+# Virgülle ayrılmış ID'leri listeye çeviriyoruz
+TARGET_IDS = [int(i.strip()) for i in os.getenv('TARGET_ID').split(',')]
 BEKLEME_SURESI = int(os.getenv('BEKLEME_SURESI'))
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 
-class MyBot(discord.Client):
+class MySelfBot(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.last_message_time = datetime.now()
-        self.is_silent = False
+        # Her hedef için ayrı takip sözlüğü
+        self.targets = {tid: {"last_time": datetime.now(), "notified": False} for tid in TARGET_IDS}
 
-    async def setup_hook(self):
-        # Arka plan görevini başlat
-        self.loop.create_task(self.monitor_silence())
-
-    def send_webhook(self):
-        data = {
-            "content": f"⚠️ **Hedef Sessiz!**\n<@{TARGET_ID}> tam {BEKLEME_SURESI} dakikadır mesaj atmıyor.",
-            "username": "Sessizlik Dedektörü"
-        }
-        requests.post(WEBHOOK_URL, json=data)
-
-    async def monitor_silence(self):
-        await self.wait_until_ready()
-        while not self.is_closed():
-            elapsed = (datetime.now() - self.last_message_time).total_seconds()
-            if elapsed >= (BEKLEME_SURESI * 60) and not self.is_silent:
-                self.send_webhook()
-                self.is_silent = True
-            await asyncio.sleep(20) # 20 saniyede bir kontrol
+    async def on_ready(self):
+        print(f'{self.user} aktif! Takip edilen kişi sayısı: {len(TARGET_IDS)}')
+        self.loop.create_task(self.check_all_silence())
 
     async def on_message(self, message):
-        if message.author.id == TARGET_ID:
-            self.last_message_time = datetime.now()
-            self.is_silent = False
+        # Eğer mesajı atan kişi takip listemizdeyse
+        if message.author.id in self.targets:
+            uid = message.author.id
+            self.targets[uid]["last_time"] = datetime.now()
+            # Eğer daha önce sessiz uyarısı verildiyse, tekrar aktif olduğunu loglayabiliriz
+            if self.targets[uid]["notified"]:
+                print(f"Hedef {uid} tekrar aktif oldu.")
+            self.targets[uid]["notified"] = False
 
-# Intents ayarları (Önemli: Developer Portal'dan hepsini açın)
-intents = discord.Intents.all()
-client = MyBot(intents=intents)
+    async def check_all_silence(self):
+        await self.wait_until_ready()
+        while not self.is_closed():
+            now = datetime.now()
+            for uid, data in self.targets.items():
+                delta = (now - data["last_time"]).total_seconds()
+                
+                # Belirlenen süre dolduysa ve henüz bildirim gitmediyse
+                if delta >= (BEKLEME_SURESI * 60) and not data["notified"]:
+                    self.send_to_webhook(uid)
+                    self.targets[uid]["notified"] = True
+            
+            await asyncio.sleep(30) # 30 saniyede bir genel kontrol
 
+    def send_to_webhook(self, user_id):
+        payload = {
+            "content": f"🔔 **Sessizlik Alarmı!**\n<@{user_id}> (ID: {user_id}) tam {BEKLEME_SURESI} dakikadır mesaj göndermiyor.",
+            "username": "Hedef Takip Sistemi"
+        }
+        try:
+            requests.post(WEBHOOK_URL, json=payload)
+        except Exception as e:
+            print(f"Webhook hatası: {e}")
+
+client = MySelfBot()
 client.run(TOKEN)
