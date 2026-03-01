@@ -67,7 +67,7 @@ class MySelfBot(discord.Client):
 
         payload = {
             "content": content,
-            "username": "TARGET"
+            "username": "Shattered Sun Target Sistemi"
         }
         
         try:
